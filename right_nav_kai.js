@@ -1,11 +1,9 @@
 // 修正版:
-// 旧コードは `import { getContext } from '../../../script.js';` としていたが、
-// getContext は script.js のエクスポートではなく extensions.js 側のものであり、
-// しかも third-party 拡張機能から script.js までは本来 4階層上る必要がある（3階層では不足）。
-// また `saveSettingsToServer` という関数名も現行 SillyTavern には存在しない
-// （正しくは saveSettingsDebounced）。
-// これらの静的importはすべて廃止し、実行時に window.SillyTavern.getContext() を
-// 呼び出す方式（公式ドキュメント推奨）に統一する。
+// 1) SillyTavern.getContext() 経由でのcontext利用（前回修正分、維持）
+// 2) fetchCharacterImage が addchara/{charName}/{charName}_ext.json の
+//    image_display_extension.thumbnail（無ければ default）を一切参照していなかったため、
+//    STJ Character Exporter で出力したサムネイル指定がキャラクター一覧に反映されない
+//    バグを修正。_ext.json を優先的に確認し、見つかった画像をアバターとして使う。
 (function () {
     'use strict';
 
@@ -20,6 +18,10 @@
 
     // 対応する画像拡張子のリスト
     const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
+
+    // _ext.json の解決結果をキャッシュ（同じキャラクターに何度もfetchしないため）
+    // 値: 解決できたURL文字列、または見つからなかったことを示す null
+    const extThumbnailCache = new Map();
 
     // デバッグログ出力関数
     function debugLog(...args) {
@@ -91,6 +93,71 @@
         });
     }
 
+    // すでに拡張子が付いているパスならそのまま、無ければ候補拡張子を順に試して実在するURLを返す
+    async function resolveImagePath(basePath) {
+        if (!basePath) return null;
+        if (basePath.match(/\.(png|jpg|jpeg|webp|gif|avif|bmp)$/i)) {
+            const exists = await checkImageExists(basePath);
+            return exists ? basePath : null;
+        }
+        for (const ext of ALLOWED_EXTENSIONS) {
+            const testUrl = `${basePath}.${ext}`;
+            const exists = await checkImageExists(testUrl);
+            if (exists) {
+                return testUrl;
+            }
+        }
+        return null;
+    }
+
+    // JSON内を再帰探索して image_display_extension を見つける（image-display.js / stj_editor.js と同じロジック）
+    function findImageMapInData(data) {
+        if (data === null || typeof data !== 'object') return null;
+        if (data.hasOwnProperty('image_display_extension')) {
+            const potentialMap = data.image_display_extension;
+            if (typeof potentialMap === 'object' && potentialMap !== null) {
+                return potentialMap;
+            }
+        }
+        for (const key in data) {
+            if (data.hasOwnProperty(key)) {
+                const result = findImageMapInData(data[key]);
+                if (result !== null) return result;
+            }
+        }
+        return null;
+    }
+
+    // addchara/{charName}/{charName}_ext.json を確認し、
+    // image_display_extension.thumbnail（無ければ default）に対応する画像URLを解決する
+    async function resolveThumbnailFromExtJson(characterName) {
+        if (extThumbnailCache.has(characterName)) {
+            return extThumbnailCache.get(characterName);
+        }
+
+        let resolvedUrl = null;
+        try {
+            const jsonPath = `addchara/${characterName}/${characterName}_ext.json`;
+            const response = await fetch(jsonPath);
+            if (response.ok) {
+                const data = await response.json();
+                const imageMap = findImageMapInData(data);
+                if (imageMap) {
+                    const candidate = imageMap.thumbnail !== undefined ? imageMap.thumbnail : imageMap.default;
+                    if (candidate) {
+                        const firstPath = Array.isArray(candidate) ? candidate[0] : candidate;
+                        resolvedUrl = await resolveImagePath(firstPath);
+                    }
+                }
+            }
+        } catch (e) {
+            debugLog(`_ext.json の解決に失敗しました (${characterName}):`, e.message);
+        }
+
+        extThumbnailCache.set(characterName, resolvedUrl);
+        return resolvedUrl;
+    }
+
     // タイトル属性等からキャラクター名を抽出するヘルパー関数
     function extractCharacterName(title) {
         if (!title) return null;
@@ -100,6 +167,15 @@
     // キャラクター画像の取得および差し替え関数
     async function fetchCharacterImage(characterName, imgElement) {
         try {
+            // 1) STJ Character Exporter が出力した _ext.json の thumbnail（無ければdefault）を優先
+            const extThumbUrl = await resolveThumbnailFromExtJson(characterName);
+            if (extThumbUrl) {
+                debugLog(`_ext.json のサムネイルを使用: ${characterName} -> ${extThumbUrl}`);
+                imgElement.src = extThumbUrl;
+                return;
+            }
+
+            // 2) 見つからない場合は従来通り characters/{name}.{ext} を試す
             for (const ext of ALLOWED_EXTENSIONS) {
                 const testUrl = `characters/${characterName}.${ext}`;
                 const exists = await checkImageExists(testUrl);
