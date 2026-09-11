@@ -21,7 +21,7 @@
     };
 
     // 対応する画像拡張子のリスト
-    const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'mp4'];
+    const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
 
     // _ext.json の解決結果をキャッシュ（同じキャラクターに何度もfetchしないため）
     // 値: 解決できたURL文字列、または見つからなかったことを示す null
@@ -111,7 +111,7 @@
     // すでに拡張子が付いているパスならそのまま、無ければ候補拡張子を順に試して実在するURLを返す
     async function resolveImagePath(basePath) {
         if (!basePath) return null;
-        if (basePath.match(/\.(png|jpg|jpeg|webp|gif|avif|bmp|mp4)$/i)) {
+        if (basePath.match(/\.(png|jpg|jpeg|webp|gif|avif|bmp)$/i)) {
             const exists = await checkImageExists(basePath);
             return exists ? basePath : null;
         }
