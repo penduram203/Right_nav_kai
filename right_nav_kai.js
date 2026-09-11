@@ -174,9 +174,15 @@
     }
 
     // タイトル属性等からキャラクター名を抽出するヘルパー関数
+    // title は "[Character] 咲葉学園\nFile: 咲葉学園.png" のような複数行の文字列であり、
+    // 単純な trim() では改行が失われて "[Character] 咲葉学園File: 咲葉学園.png" という
+    // 誤った文字列になってしまうため、1行目から "[Character] " プレフィックスを除いた
+    // 実際のキャラクター名だけを取り出す。
     function extractCharacterName(title) {
         if (!title) return null;
-        return title.trim();
+        const firstLine = title.split('\n')[0].trim();
+        const match = firstLine.match(/^\[Character\]\s*(.+)$/);
+        return (match ? match[1] : firstLine).trim();
     }
 
     // キャラクター画像の取得および差し替え関数
