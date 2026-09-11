@@ -1,6 +1,11 @@
-import { getContext } from '../../../script.js';
-import { extension_settings, saveSettingsToServer } from '../../../extensions.js';
-
+// 修正版:
+// 旧コードは `import { getContext } from '../../../script.js';` としていたが、
+// getContext は script.js のエクスポートではなく extensions.js 側のものであり、
+// しかも third-party 拡張機能から script.js までは本来 4階層上る必要がある（3階層では不足）。
+// また `saveSettingsToServer` という関数名も現行 SillyTavern には存在しない
+// （正しくは saveSettingsDebounced）。
+// これらの静的importはすべて廃止し、実行時に window.SillyTavern.getContext() を
+// 呼び出す方式（公式ドキュメント推奨）に統一する。
 (function () {
     'use strict';
 
@@ -23,18 +28,34 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
         }
     }
 
+    // SillyTavern context を取得するヘルパー（未取得ならnull）
+    function getSTContext() {
+        if (window.SillyTavern && typeof window.SillyTavern.getContext === 'function') {
+            return window.SillyTavern.getContext();
+        }
+        return null;
+    }
+
     // 設定の読み込みと初期化（localStorageからの移行処理含む）
     function loadSettings() {
-        extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
+        const context = getSTContext();
+        if (!context || !context.extensionSettings) {
+            console.warn('[RightNavKai] SillyTavern context が取得できませんでした。設定の読み込みをスキップします。');
+            return;
+        }
+
+        context.extensionSettings[MODULE_NAME] = context.extensionSettings[MODULE_NAME] || {};
 
         // 既存の localStorage データが存在する場合は移行
         const localData = localStorage.getItem('right_nav_kai_settings');
         if (localData) {
             try {
                 const parsed = JSON.parse(localData);
-                Object.assign(extension_settings[MODULE_NAME], parsed);
+                Object.assign(context.extensionSettings[MODULE_NAME], parsed);
                 localStorage.removeItem('right_nav_kai_settings');
-                saveSettingsToServer();
+                if (typeof context.saveSettingsDebounced === 'function') {
+                    context.saveSettingsDebounced();
+                }
                 debugLog('Migrated settings from localStorage to extensionSettings (server)');
             } catch (e) {
                 console.error('Failed to parse localStorage settings:', e);
@@ -43,16 +64,21 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
 
         // デフォルト値の適用
         for (const key in defaultSettings) {
-            if (extension_settings[MODULE_NAME][key] === undefined) {
-                extension_settings[MODULE_NAME][key] = defaultSettings[key];
+            if (context.extensionSettings[MODULE_NAME][key] === undefined) {
+                context.extensionSettings[MODULE_NAME][key] = defaultSettings[key];
             }
         }
     }
 
     // 設定の保存関数
     function saveSettings() {
-        saveSettingsToServer();
-        debugLog('Settings saved to server');
+        const context = getSTContext();
+        if (context && typeof context.saveSettingsDebounced === 'function') {
+            context.saveSettingsDebounced();
+            debugLog('Settings saved to server');
+        } else {
+            console.warn('[RightNavKai] saveSettingsDebounced が利用できないため設定を保存できませんでした。');
+        }
     }
 
     // 画像の存在確認関数
@@ -117,7 +143,11 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
     // イベント駆動によるリスナーのセットアップ
     function setupEventListeners() {
         try {
-            const context = getContext();
+            const context = getSTContext();
+            if (!context) {
+                console.warn('[RightNavKai] SillyTavern context が取得できないため、イベントリスナーを登録できません。');
+                return;
+            }
             const eventSource = context.eventSource;
             const eventTypes = context.eventTypes;
 
@@ -126,7 +156,7 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
                 eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, updateCharacterImages);
                 eventSource.on(eventTypes.USER_MESSAGE_RENDERED, updateCharacterImages);
                 eventSource.on(eventTypes.CHAT_CHANGED, updateCharacterImages);
-                
+
                 // 必要に応じてキャラクターリスト変更や編集完了時の各種イベントも登録可能
                 if (eventTypes.MESSAGE_UPDATED) {
                     eventSource.on(eventTypes.MESSAGE_UPDATED, updateCharacterImages);
@@ -144,12 +174,17 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
     // 初期化関数
     function initialize() {
         debugLog('Initializing Right Nav Kai extension');
+
+        const context = getSTContext();
+        if (!context) {
+            // SillyTavern本体の初期化がまだ済んでいない可能性があるため少し待って再試行
+            debugLog('SillyTavern context not ready yet, retrying in 500ms...');
+            setTimeout(initialize, 500);
+            return;
+        }
+
         loadSettings();
-
-        // イベントリスナー設定
         setupEventListeners();
-
-        // 初回画像更新
         updateCharacterImages();
     }
 
