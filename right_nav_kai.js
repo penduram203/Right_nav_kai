@@ -31,12 +31,10 @@
         if (!basePath || typeof basePath !== 'string' || !basePath.trim()) return null;
         const cleanPath = basePath.trim();
         
-        // 既に拡張子が含まれている場合
         if (cleanPath.match(/\.(png|jpg|jpeg|webp|gif|avif|bmp|mp4|webm)$/i)) {
             return cleanPath;
         }
 
-        // 拡張子を順番に試行
         for (const ext of ALLOWED_EXTENSIONS) {
             const pathWithExt = `${cleanPath}.${ext}`;
             const exists = await checkMediaExists(pathWithExt);
@@ -59,13 +57,13 @@
             video.playsInline = true;
             video.classList.add('right-nav-char-image');
             
-            // CSSスタイルを明示的に指定してサイズ崩れ・非表示化を防止
+            // 縦横比を維持してはみ出さないようにcontainを指定
             video.style.width = '100%';
             video.style.height = '100%';
-            video.style.objectFit = 'cover';
+            video.style.objectFit = 'contain';
+            video.style.backgroundColor = 'rgba(0, 0, 0, 0.4)'; // 余白部分の背景色
             video.style.display = 'block';
 
-            // 自動再生の強制実行処理
             video.play().catch(err => {
                 console.warn(`${LOG_PREFIX} 動画の自動再生がブロックされました:`, err);
             });
@@ -85,10 +83,11 @@
             img.alt = altText;
             img.classList.add('right-nav-char-image');
             
-            // スタイル指定
+            // 縦横比を維持してはみ出さないようにcontainを指定
             img.style.width = '100%';
             img.style.height = '100%';
-            img.style.objectFit = 'cover';
+            img.style.objectFit = 'contain';
+            img.style.backgroundColor = 'rgba(0, 0, 0, 0.4)'; // 余白部分の背景色
             img.style.display = 'block';
 
             img.onerror = async () => {
@@ -106,7 +105,6 @@
     async function getCharacterImageSrc(charName) {
         if (!charName) return null;
 
-        // 1. _ext.json からのサムネイル/デフォルト画像検索
         try {
             const extPath = `addchara/${charName}/${charName}_ext.json`;
             const resp = await fetch(extPath);
@@ -130,10 +128,9 @@
                 }
             }
         } catch (e) {
-            // json読み込み失敗時は無視して標準ルートへ
+            // json読み込み失敗時は無視
         }
 
-        // 2. SillyTavern 内のアバター画像を取得
         const context = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
         if (context && context.characters) {
             const charObj = context.characters.find(c => c.name === charName);
@@ -142,7 +139,6 @@
             }
         }
 
-        // 3. デフォルト fallback パス
         const defaultPath = await detectMediaExtension(`addchara/${charName}/default`) 
                           || await detectMediaExtension('addchara/default');
         return defaultPath;
@@ -150,7 +146,6 @@
 
     // --- 右ナビパネル内のキャラクター画像更新 ---
     async function updateCharacterImages() {
-        // SillyTavern標準および拡張UIのパネルセレクタに対応
         const panel = document.querySelector('#right-nav-panel, .right-nav-panel, #rm_bar, #character_list');
         if (!panel) return;
 
@@ -165,7 +160,6 @@
         for (let i = 0; i < charBlocks.length; i++) {
             const block = charBlocks[i];
             
-            // キャラクター名の取得
             let charName = block.dataset.name || block.getAttribute('data-name') || block.getAttribute('chid');
             if (!charName) {
                 const nameEl = block.querySelector('.character-name, .char-name, .ch_name');
@@ -179,20 +173,20 @@
             const mediaSrc = await getCharacterImageSrc(charName);
             if (!mediaSrc) continue;
 
-            // 既存のアバター表示ターゲット領域を取得または作成
             let imgContainer = block.querySelector('.right-nav-img-container, .avatar');
             if (!imgContainer) {
                 imgContainer = document.createElement('div');
                 imgContainer.className = 'right-nav-img-container';
                 imgContainer.style.width = '100%';
                 imgContainer.style.height = '100%';
+                imgContainer.style.overflow = 'hidden';
                 block.insertBefore(imgContainer, block.firstChild);
             } else {
                 imgContainer.style.width = '100%';
                 imgContainer.style.height = '100%';
+                imgContainer.style.overflow = 'hidden';
             }
 
-            // 既存メディアと異なる場合は置き換え
             const currentMedia = imgContainer.querySelector('.right-nav-char-image');
             if (!currentMedia || currentMedia.getAttribute('data-src') !== mediaSrc) {
                 imgContainer.innerHTML = '';
@@ -203,7 +197,6 @@
         }
     }
 
-    // デバウンス処理
     function debounce(func, wait) {
         let timeout;
         return function (...args) {
@@ -214,7 +207,6 @@
 
     const debouncedUpdate = debounce(updateCharacterImages, 300);
 
-    // --- DOM監視 (パネルの描画変化に追従) ---
     function setupMutationObserver() {
         const targetNode = document.body;
         const observer = new MutationObserver((mutations) => {
@@ -230,7 +222,6 @@
         console.log(`${LOG_PREFIX} パネル描画の監視を開始しました。`);
     }
 
-    // --- EventSource 安全監視 ---
     function setupEventSourceListeners() {
         if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
             const context = SillyTavern.getContext();
@@ -252,7 +243,6 @@
         }
     }
 
-    // --- 初期化 ---
     function init() {
         console.log(`${LOG_PREFIX} Right Nav Kai extension loaded`);
         console.log(`${LOG_PREFIX} Initializing Right Nav Kai extension`);
