@@ -1,9 +1,13 @@
 // 修正版:
 // 1) SillyTavern.getContext() 経由でのcontext利用（前回修正分、維持）
-// 2) fetchCharacterImage が addchara/{charName}/{charName}_ext.json の
-//    image_display_extension.thumbnail（無ければ default）を一切参照していなかったため、
-//    STJ Character Exporter で出力したサムネイル指定がキャラクター一覧に反映されない
-//    バグを修正。_ext.json を優先的に確認し、見つかった画像をアバターとして使う。
+// 2) addchara/{charName}/{charName}_ext.json の image_display_extension.thumbnail(無ければdefault)
+//    を参照してキャラ一覧のアバターに反映する処理（前回修正分、維持）
+// 3) 今回の修正: updateCharacterImages() が拡張機能起動直後の1回しか呼ばれておらず、
+//    その時点では #right-nav-panel 内にキャラクターブロックがまだ描画されていないため
+//    "Found 0 character blocks" のまま何も更新されていなかったバグを修正。
+//    CHARACTER_MESSAGE_RENDERED 等の「メッセージ表示イベント」だけに頼るのではなく、
+//    #right-nav-panel 自体を MutationObserver で監視し、一覧の中身が実際に
+//    描画・変化したタイミングで確実に再実行するようにした。
 (function () {
     'use strict';
 
@@ -23,11 +27,22 @@
     // 値: 解決できたURL文字列、または見つからなかったことを示す null
     const extThumbnailCache = new Map();
 
+    let panelObserver = null;
+
     // デバッグログ出力関数
     function debugLog(...args) {
         if (DEBUG) {
             console.log('[RightNavKai DEBUG]', ...args);
         }
+    }
+
+    // デバウンス処理（MutationObserverの連続発火をまとめるため）
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func(...args), wait);
+        };
     }
 
     // SillyTavern context を取得するヘルパー（未取得ならnull）
@@ -167,11 +182,17 @@
     // キャラクター画像の取得および差し替え関数
     async function fetchCharacterImage(characterName, imgElement) {
         try {
+            // すでに _ext.json 由来の画像が適用済みなら再取得しない（Observerによる多重発火対策）
+            if (imgElement.dataset.rightNavKaiResolved === characterName) {
+                return;
+            }
+
             // 1) STJ Character Exporter が出力した _ext.json の thumbnail（無ければdefault）を優先
             const extThumbUrl = await resolveThumbnailFromExtJson(characterName);
             if (extThumbUrl) {
                 debugLog(`_ext.json のサムネイルを使用: ${characterName} -> ${extThumbUrl}`);
                 imgElement.src = extThumbUrl;
+                imgElement.dataset.rightNavKaiResolved = characterName;
                 return;
             }
 
@@ -181,11 +202,13 @@
                 const exists = await checkImageExists(testUrl);
                 if (exists) {
                     imgElement.src = testUrl;
+                    imgElement.dataset.rightNavKaiResolved = characterName;
                     return;
                 }
             }
             // 該当画像が見つからない場合はデフォルト画像にフォールバック
             imgElement.src = 'addchara/default.png';
+            imgElement.dataset.rightNavKaiResolved = characterName;
         } catch (error) {
             console.error(`Right Nav Kai: Failed to load image for ${characterName}`, error);
             debugLog(`Error details: ${error.message}`);
@@ -194,9 +217,12 @@
 
     // 画像更新処理
     function updateCharacterImages() {
-        debugLog('Updating character images...');
         const characterBlocks = document.querySelectorAll('#right-nav-panel .character_select');
-        debugLog(`Found ${characterBlocks.length} character blocks`);
+        if (characterBlocks.length === 0) {
+            debugLog('Updating character images... Found 0 character blocks (パネル未描画のためスキップ)');
+            return;
+        }
+        debugLog(`Updating character images... Found ${characterBlocks.length} character blocks`);
 
         characterBlocks.forEach((block, index) => {
             const avatarElement = block.querySelector('.avatar');
@@ -216,7 +242,37 @@
         });
     }
 
-    // イベント駆動によるリスナーのセットアップ
+    // #right-nav-panel を監視し、キャラクター一覧が実際に描画/変化したタイミングで
+    // updateCharacterImages を確実に呼び直す
+    function setupPanelObserver() {
+        const panel = document.getElementById('right-nav-panel');
+        if (!panel) {
+            // パネル自体がまだDOMに存在しない場合は少し待って再試行
+            setTimeout(setupPanelObserver, 1000);
+            return;
+        }
+
+        if (panelObserver) {
+            panelObserver.disconnect();
+        }
+
+        const debouncedUpdate = debounce(updateCharacterImages, 200);
+
+        panelObserver = new MutationObserver((mutations) => {
+            // アバター画像の src 書き換え自体は無視し、子要素の追加/削除のみ検知する
+            const hasRelevantChange = mutations.some(m => m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0));
+            if (hasRelevantChange) {
+                debouncedUpdate();
+            }
+        });
+        panelObserver.observe(panel, { childList: true, subtree: true });
+        debugLog('#right-nav-panel の監視を開始しました。');
+
+        // 監視開始時点ですでに一覧が存在している場合に備えて一度実行
+        updateCharacterImages();
+    }
+
+    // イベント駆動によるリスナーのセットアップ（Observerの補助として引き続き利用）
     function setupEventListeners() {
         try {
             const context = getSTContext();
@@ -228,14 +284,18 @@
             const eventTypes = context.eventTypes;
 
             if (eventSource && eventTypes) {
-                // キャラクターメッセージ表示、ユーザーメッセージ表示、チャット切り替え時に画像更新を実行
                 eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, updateCharacterImages);
                 eventSource.on(eventTypes.USER_MESSAGE_RENDERED, updateCharacterImages);
                 eventSource.on(eventTypes.CHAT_CHANGED, updateCharacterImages);
 
-                // 必要に応じてキャラクターリスト変更や編集完了時の各種イベントも登録可能
                 if (eventTypes.MESSAGE_UPDATED) {
                     eventSource.on(eventTypes.MESSAGE_UPDATED, updateCharacterImages);
+                }
+                if (eventTypes.CHARACTER_PAGE_LOADED) {
+                    eventSource.on(eventTypes.CHARACTER_PAGE_LOADED, updateCharacterImages);
+                }
+                if (eventTypes.APP_READY) {
+                    eventSource.on(eventTypes.APP_READY, updateCharacterImages);
                 }
 
                 debugLog('Event listeners registered successfully');
@@ -261,7 +321,7 @@
 
         loadSettings();
         setupEventListeners();
-        updateCharacterImages();
+        setupPanelObserver();
     }
 
     debugLog('Right Nav Kai extension loaded');
