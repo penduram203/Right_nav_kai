@@ -1,9 +1,9 @@
+import { getContext } from '../../../script.js';
 import { extension_settings, saveSettingsToServer } from '../../../extensions.js';
 
 (function () {
     'use strict';
 
-    let debounceTimer;
     const DEBUG = true; // デバッグモード
     const MODULE_NAME = 'right_nav_kai';
 
@@ -114,22 +114,31 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
         });
     }
 
-    // ナビパネルの Observer 設定関数
-    function setupObserverForNavPanel(navPanel) {
-        const observer = new MutationObserver((mutations) => {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                updateCharacterImages();
-            }, 100);
-        });
+    // イベント駆動によるリスナーのセットアップ
+    function setupEventListeners() {
+        try {
+            const context = getContext();
+            const eventSource = context.eventSource;
+            const eventTypes = context.eventTypes;
 
-        observer.observe(navPanel, {
-            childList: true,
-            subtree: true
-        });
+            if (eventSource && eventTypes) {
+                // キャラクターメッセージ表示、ユーザーメッセージ表示、チャット切り替え時に画像更新を実行
+                eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, updateCharacterImages);
+                eventSource.on(eventTypes.USER_MESSAGE_RENDERED, updateCharacterImages);
+                eventSource.on(eventTypes.CHAT_CHANGED, updateCharacterImages);
+                
+                // 必要に応じてキャラクターリスト変更や編集完了時の各種イベントも登録可能
+                if (eventTypes.MESSAGE_UPDATED) {
+                    eventSource.on(eventTypes.MESSAGE_UPDATED, updateCharacterImages);
+                }
 
-        // 初回実行
-        updateCharacterImages();
+                debugLog('Event listeners registered successfully');
+            } else {
+                console.warn('[RightNavKai] eventSource or eventTypes not found in context.');
+            }
+        } catch (error) {
+            console.error('[RightNavKai] Failed to setup event listeners:', error);
+        }
     }
 
     // 初期化関数
@@ -137,20 +146,11 @@ import { extension_settings, saveSettingsToServer } from '../../../extensions.js
         debugLog('Initializing Right Nav Kai extension');
         loadSettings();
 
-        const navPanel = document.getElementById('right-nav-panel');
-        if (navPanel) {
-            setupObserverForNavPanel(navPanel);
-        } else {
-            const bodyObserver = new MutationObserver((mutations, observer) => {
-                const foundPanel = document.getElementById('right-nav-panel');
-                if (foundPanel) {
-                    debugLog('Nav panel found via observer');
-                    setupObserverForNavPanel(foundPanel);
-                    observer.disconnect();
-                }
-            });
-            bodyObserver.observe(document.body, { childList: true, subtree: true });
-        }
+        // イベントリスナー設定
+        setupEventListeners();
+
+        // 初回画像更新
+        updateCharacterImages();
     }
 
     debugLog('Right Nav Kai extension loaded');
