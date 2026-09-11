@@ -1,17 +1,20 @@
-import { getContext } from '../../../script.js';
 import { extension_settings, saveSettingsToServer } from '../../../extensions.js';
-import { ALLOWED_EXTENSIONS, checkImageExists } from '../stj_editor/stj-common.js';
 
 (function () {
     'use strict';
 
+    let debounceTimer;
     const DEBUG = true; // デバッグモード
     const MODULE_NAME = 'right_nav_kai';
 
     // デフォルト設定の定義
     const defaultSettings = {
         enabled: true,
+        // 今後追加される拡張設定があればここに記述
     };
+
+    // 対応する画像拡張子のリスト
+    const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
 
     // デバッグログ出力関数
     function debugLog(...args) {
@@ -52,13 +55,23 @@ import { ALLOWED_EXTENSIONS, checkImageExists } from '../stj_editor/stj-common.j
         debugLog('Settings saved to server');
     }
 
+    // 画像の存在確認関数
+    function checkImageExists(imageUrl) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(true);
+            img.onerror = () => resolve(false);
+            img.src = imageUrl;
+        });
+    }
+
     // タイトル属性等からキャラクター名を抽出するヘルパー関数
     function extractCharacterName(title) {
         if (!title) return null;
         return title.trim();
     }
 
-    // キャラクター画像の取得および差し替え関数（共通ユーティリティを使用）
+    // キャラクター画像の取得および差し替え関数
     async function fetchCharacterImage(characterName, imgElement) {
         try {
             for (const ext of ALLOWED_EXTENSIONS) {
@@ -101,41 +114,48 @@ import { ALLOWED_EXTENSIONS, checkImageExists } from '../stj_editor/stj-common.j
         });
     }
 
-    // イベント駆動によるリスナーのセットアップ
-    function setupEventListeners() {
-        try {
-            const context = getContext();
-            const eventSource = context.eventSource;
-            const eventTypes = context.eventTypes;
+    // ナビパネルの Observer 設定関数
+    function setupObserverForNavPanel(navPanel) {
+        const observer = new MutationObserver((mutations) => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                updateCharacterImages();
+            }, 100);
+        });
 
-            if (eventSource && eventTypes) {
-                eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, updateCharacterImages);
-                eventSource.on(eventTypes.USER_MESSAGE_RENDERED, updateCharacterImages);
-                eventSource.on(eventTypes.CHAT_CHANGED, updateCharacterImages);
-                
-                if (eventTypes.MESSAGE_UPDATED) {
-                    eventSource.on(eventTypes.MESSAGE_UPDATED, updateCharacterImages);
-                }
+        observer.observe(navPanel, {
+            childList: true,
+            subtree: true
+        });
 
-                debugLog('Event listeners registered successfully');
-            } else {
-                console.warn('[RightNavKai] eventSource or eventTypes not found in context.');
-            }
-        } catch (error) {
-            console.error('[RightNavKai] Failed to setup event listeners:', error);
-        }
+        // 初回実行
+        updateCharacterImages();
     }
 
     // 初期化関数
     function initialize() {
         debugLog('Initializing Right Nav Kai extension');
         loadSettings();
-        setupEventListeners();
-        updateCharacterImages();
+
+        const navPanel = document.getElementById('right-nav-panel');
+        if (navPanel) {
+            setupObserverForNavPanel(navPanel);
+        } else {
+            const bodyObserver = new MutationObserver((mutations, observer) => {
+                const foundPanel = document.getElementById('right-nav-panel');
+                if (foundPanel) {
+                    debugLog('Nav panel found via observer');
+                    setupObserverForNavPanel(foundPanel);
+                    observer.disconnect();
+                }
+            });
+            bodyObserver.observe(document.body, { childList: true, subtree: true });
+        }
     }
 
     debugLog('Right Nav Kai extension loaded');
 
+    // DOM構築完了後に初期化を実行
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
