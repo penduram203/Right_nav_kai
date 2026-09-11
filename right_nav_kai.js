@@ -55,12 +55,27 @@
             video.autoplay = true;
             video.loop = true;
             video.muted = true;
+            video.defaultMuted = true;
             video.playsInline = true;
             video.classList.add('right-nav-char-image');
+            
+            // CSSスタイルを明示的に指定してサイズ崩れ・非表示化を防止
+            video.style.width = '100%';
+            video.style.height = '100%';
+            video.style.objectFit = 'cover';
+            video.style.display = 'block';
+
+            // 自動再生の強制実行処理
+            video.play().catch(err => {
+                console.warn(`${LOG_PREFIX} 動画の自動再生がブロックされました:`, err);
+            });
+
             video.onerror = async () => {
+                console.warn(`${LOG_PREFIX} 動画読み込みエラー。拡張子再検出を実行: ${src}`);
                 const detected = await detectMediaExtension(src);
                 if (detected && detected !== src) {
                     video.src = detected;
+                    video.play().catch(() => {});
                 }
             };
             return video;
@@ -69,7 +84,15 @@
             img.src = src;
             img.alt = altText;
             img.classList.add('right-nav-char-image');
+            
+            // スタイル指定
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'cover';
+            img.style.display = 'block';
+
             img.onerror = async () => {
+                console.warn(`${LOG_PREFIX} 画像読み込みエラー。拡張子再検出を実行: ${src}`);
                 const detected = await detectMediaExtension(src);
                 if (detected && detected !== src) {
                     img.src = detected;
@@ -127,10 +150,11 @@
 
     // --- 右ナビパネル内のキャラクター画像更新 ---
     async function updateCharacterImages() {
-        const panel = document.querySelector('#right-nav-panel, .right-nav-panel');
+        // SillyTavern標準および拡張UIのパネルセレクタに対応
+        const panel = document.querySelector('#right-nav-panel, .right-nav-panel, #rm_bar, #character_list');
         if (!panel) return;
 
-        const charBlocks = panel.querySelectorAll('.right-nav-char-block, .character-block');
+        const charBlocks = document.querySelectorAll('.right-nav-char-block, .character-block, .character_select');
         if (charBlocks.length === 0) {
             console.log(`${LOG_PREFIX} Updating character images... Found 0 character blocks (パネル未描画のためスキップ)`);
             return;
@@ -142,9 +166,9 @@
             const block = charBlocks[i];
             
             // キャラクター名の取得
-            let charName = block.dataset.name || block.getAttribute('data-name');
+            let charName = block.dataset.name || block.getAttribute('data-name') || block.getAttribute('chid');
             if (!charName) {
-                const nameEl = block.querySelector('.character-name, .char-name');
+                const nameEl = block.querySelector('.character-name, .char-name, .ch_name');
                 if (nameEl) charName = nameEl.textContent.trim();
             }
 
@@ -155,12 +179,17 @@
             const mediaSrc = await getCharacterImageSrc(charName);
             if (!mediaSrc) continue;
 
-            // 既存の画像/動画コンテナを取得または作成
-            let imgContainer = block.querySelector('.right-nav-img-container');
+            // 既存のアバター表示ターゲット領域を取得または作成
+            let imgContainer = block.querySelector('.right-nav-img-container, .avatar');
             if (!imgContainer) {
                 imgContainer = document.createElement('div');
                 imgContainer.className = 'right-nav-img-container';
+                imgContainer.style.width = '100%';
+                imgContainer.style.height = '100%';
                 block.insertBefore(imgContainer, block.firstChild);
+            } else {
+                imgContainer.style.width = '100%';
+                imgContainer.style.height = '100%';
             }
 
             // 既存メディアと異なる場合は置き換え
@@ -191,19 +220,14 @@
         const observer = new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 if (mutation.addedNodes.length > 0) {
-                    const hasPanel = Array.from(mutation.addedNodes).some(node => 
-                        node.nodeType === 1 && (node.id === 'right-nav-panel' || node.classList.contains('right-nav-panel') || node.querySelector('#right-nav-panel'))
-                    );
-                    if (hasPanel) {
-                        debouncedUpdate();
-                        break;
-                    }
+                    debouncedUpdate();
+                    break;
                 }
             }
         });
 
         observer.observe(targetNode, { childList: true, subtree: true });
-        console.log(`${LOG_PREFIX} #right-nav-panel の監視を開始しました。`);
+        console.log(`${LOG_PREFIX} パネル描画の監視を開始しました。`);
     }
 
     // --- EventSource 安全監視 ---
