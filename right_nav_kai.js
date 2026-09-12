@@ -88,7 +88,7 @@
         }
     }
 
-    // --- キャラクター画像（サムネイル）パスの取得 ---
+// --- キャラクター画像（サムネイル）パスの取得（総当たり廃止版） ---
     async function getCharacterImageSrc(charName) {
         if (!charName) return null;
 
@@ -108,30 +108,19 @@
 
                 if (candidate) {
                     const src = Array.isArray(candidate) ? candidate[0] : candidate;
-                    const detected = await detectMediaExtension(src);
-                    if (detected) {
-                        console.log(`${LOG_PREFIX} _ext.json のサムネイルを使用: ${charName} -> ${detected}`);
-                        return detected;
+                    // 総当たりせず、そのまま存在確認を行う
+                    const exists = await checkMediaExists(src);
+                    if (exists) {
+                        return src;
                     }
                 }
             }
         } catch (e) {
-            // json読み込み失敗時は無視して標準ルートへ
+            // json読み込み失敗時は無視
         }
 
-        // 2. SillyTavern 内のアバター画像を取得
-        const context = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
-        if (context && context.characters) {
-            const charObj = context.characters.find(c => c.name === charName);
-            if (charObj && charObj.avatar) {
-                return `characters/${charObj.avatar}`;
-            }
-        }
-
-        // 3. デフォルト fallback パス
-        const defaultPath = await detectMediaExtension(`addchara/${charName}/default`) 
-                          || await detectMediaExtension('addchara/default');
-        return defaultPath;
+        // 2. フォールバック
+        return `addchara/${charName}/defa.mp4`;
     }
 
     // --- 右ナビパネル内のキャラクター画像更新 ---
