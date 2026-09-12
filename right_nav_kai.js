@@ -31,36 +31,25 @@
         });
     }
 
-    // --- 拡張子自動検出 (キャッシュ対応) ---
+// --- 拡張子自動検出 (総当たりを廃止し、指定パスを直接評価・キャッシュ) ---
     async function detectMediaExtension(basePath) {
         if (!basePath || typeof basePath !== 'string' || !basePath.trim()) return null;
         const cleanPath = basePath.trim();
 
-        // 1. すでに検出結果（成功 or 404失敗）がキャッシュされていれば通信せずに即返す
+        // 1. 既に検出結果がキャッシュされていれば即返す
         if (mediaCache.has(cleanPath)) {
             return mediaCache.get(cleanPath);
         }
 
-        // 2. 既に拡張子が含まれている場合
-        if (cleanPath.match(/\.(png|jpg|jpeg|webp|gif|avif|bmp|mp4|webm)$/i)) {
-            const exists = await checkMediaExists(cleanPath);
-            const result = exists ? cleanPath : null;
-            mediaCache.set(cleanPath, result);
-            return result;
+        // 2. パスに拡張子がすでに含まれている場合、または総当たりを行わずに直接存在確認する場合
+        // （_ext.json等で拡張子が明記されている場合はそのままチェックする）
+        const exists = await checkMediaExists(cleanPath);
+        if (exists) {
+            mediaCache.set(cleanPath, cleanPath);
+            return cleanPath;
         }
 
-        // 3. 拡張子を順番に試行
-        for (const ext of ALLOWED_EXTENSIONS) {
-            const pathWithExt = `${cleanPath}.${ext}`;
-            const exists = await checkMediaExists(pathWithExt);
-            if (exists) {
-                console.log(`${LOG_PREFIX} ✅ 拡張子自動検出（キャッシュ保存）: ${pathWithExt}`);
-                mediaCache.set(cleanPath, pathWithExt);
-                return pathWithExt;
-            }
-        }
-
-        // 存在しなかった場合も null を記憶（次回からの 404 リクエストを完全にカット）
+        // 3. 拡張子が含まれておらず、かつファイルが存在しない場合は 404 キャッシュとして保持
         mediaCache.set(cleanPath, null);
         return null;
     }
