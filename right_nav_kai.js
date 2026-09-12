@@ -56,7 +56,8 @@
             video.classList.add('right-nav-char-image');
             video.style.width = '100%';
             video.style.height = '100%';
-            video.style.objectFit = 'cover';
+            // objectFit を 'cover' から 'contain' に変更（長辺基準で枠内に収める）
+            video.style.objectFit = 'contain';
             return video;
         } else {
             const img = document.createElement('img');
@@ -65,7 +66,8 @@
             img.classList.add('right-nav-char-image');
             img.style.width = '100%';
             img.style.height = '100%';
-            img.style.objectFit = 'cover';
+            // objectFit を 'cover' から 'contain' に変更（長辺基準で枠内に収める）
+            img.style.objectFit = 'contain';
             return img;
         }
     }
