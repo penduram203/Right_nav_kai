@@ -2,11 +2,7 @@
     const MODULE_NAME = 'right_nav_kai';
     const LOG_PREFIX = '[RightNavKai DEBUG]';
 
-    // 許容する拡張子リスト（画像・動画）
-    const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'mp4', 'webm'];
-
-    // --- メディア検出結果のキャッシュ (404リクエストの連発を阻止) ---
-    // key: basePath または url, value: 発見された有効なURL (存在しない場合は null)
+    // --- メディア検出結果のキャッシュ ---
     const mediaCache = new Map();
 
     function isVideoUrl(url) {
@@ -14,44 +10,38 @@
         return !!url.match(/\.(mp4|webm)$/i);
     }
 
+    // メディアの存在確認（タイムアウト付きで安全化）
     function checkMediaExists(mediaUrl) {
         return new Promise((resolve) => {
             if (!mediaUrl || typeof mediaUrl !== 'string' || !mediaUrl.trim()) return resolve(false);
+
+            const timeout = setTimeout(() => resolve(false), 3000); // 3秒でタイムアウト
+
             if (isVideoUrl(mediaUrl)) {
                 const video = document.createElement('video');
-                video.onloadedmetadata = () => resolve(true);
-                video.onerror = () => resolve(false);
+                video.preload = 'metadata';
+                video.onloadedmetadata = () => {
+                    clearTimeout(timeout);
+                    resolve(true);
+                };
+                video.onerror = () => {
+                    clearTimeout(timeout);
+                    resolve(false);
+                };
                 video.src = mediaUrl;
             } else {
                 const img = new Image();
-                img.onload = () => resolve(true);
-                img.onerror = () => resolve(false);
+                img.onload = () => {
+                    clearTimeout(timeout);
+                    resolve(true);
+                };
+                img.onerror = () => {
+                    clearTimeout(timeout);
+                    resolve(false);
+                };
                 img.src = mediaUrl;
             }
         });
-    }
-
-// --- 拡張子自動検出 (総当たりを廃止し、指定パスを直接評価・キャッシュ) ---
-    async function detectMediaExtension(basePath) {
-        if (!basePath || typeof basePath !== 'string' || !basePath.trim()) return null;
-        const cleanPath = basePath.trim();
-
-        // 1. 既に検出結果がキャッシュされていれば即返す
-        if (mediaCache.has(cleanPath)) {
-            return mediaCache.get(cleanPath);
-        }
-
-        // 2. パスに拡張子がすでに含まれている場合、または総当たりを行わずに直接存在確認する場合
-        // （_ext.json等で拡張子が明記されている場合はそのままチェックする）
-        const exists = await checkMediaExists(cleanPath);
-        if (exists) {
-            mediaCache.set(cleanPath, cleanPath);
-            return cleanPath;
-        }
-
-        // 3. 拡張子が含まれておらず、かつファイルが存在しない場合は 404 キャッシュとして保持
-        mediaCache.set(cleanPath, null);
-        return null;
     }
 
     // --- メディアDOM要素（img または video）の作成 ---
@@ -64,33 +54,29 @@
             video.muted = true;
             video.playsInline = true;
             video.classList.add('right-nav-char-image');
-            video.onerror = async () => {
-                mediaCache.delete(src); // エラー時はキャッシュを破棄して再確認
-                const detected = await detectMediaExtension(src);
-                if (detected && detected !== src) {
-                    video.src = detected;
-                }
-            };
+            video.style.width = '100%';
+            video.style.height = '100%';
+            video.style.objectFit = 'cover';
             return video;
         } else {
             const img = document.createElement('img');
             img.src = src;
             img.alt = altText;
             img.classList.add('right-nav-char-image');
-            img.onerror = async () => {
-                mediaCache.delete(src); // エラー時はキャッシュを破棄して再確認
-                const detected = await detectMediaExtension(src);
-                if (detected && detected !== src) {
-                    img.src = detected;
-                }
-            };
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'cover';
             return img;
         }
     }
 
-// --- キャラクター画像（サムネイル）パスの取得（総当たり廃止版） ---
+    // --- キャラクター画像（サムネイル）パスの取得 ---
     async function getCharacterImageSrc(charName) {
         if (!charName) return null;
+
+        if (mediaCache.has(charName)) {
+            return mediaCache.get(charName);
+        }
 
         // 1. _ext.json からのサムネイル/デフォルト画像検索
         try {
@@ -98,19 +84,17 @@
             const resp = await fetch(extPath);
             if (resp.ok) {
                 const data = await resp.json();
-                let candidate = null;
+                let candidate = data.thumbnail || data.default;
 
-                if (data.image_display_extension) {
+                if (!candidate && data.image_display_extension) {
                     candidate = data.image_display_extension.thumbnail || data.image_display_extension.default;
-                } else if (data.thumbnail || data.default) {
-                    candidate = data.thumbnail || data.default;
                 }
 
                 if (candidate) {
                     const src = Array.isArray(candidate) ? candidate[0] : candidate;
-                    // 総当たりせず、そのまま存在確認を行う
                     const exists = await checkMediaExists(src);
                     if (exists) {
+                        mediaCache.set(charName, src);
                         return src;
                     }
                 }
@@ -119,19 +103,26 @@
             // json読み込み失敗時は無視
         }
 
-        // 2. フォールバック
-        return `addchara/${charName}/defa.mp4`;
+        // 2. フォールバック (defa.mp4)
+        const fallback = `addchara/${charName}/defa.mp4`;
+        const exists = await checkMediaExists(fallback);
+        if (exists) {
+            mediaCache.set(charName, fallback);
+            return fallback;
+        }
+
+        mediaCache.set(charName, null);
+        return null;
     }
 
     // --- 右ナビパネル内のキャラクター画像更新 ---
     async function updateCharacterImages() {
-        const panel = document.querySelector('#right-nav-panel, .right-nav-panel');
+        const panel = document.querySelector('#right-nav-panel, .right-nav-panel, #rm_char_sp_mag, #character_list');
         if (!panel) return;
 
-        const charBlocks = panel.querySelectorAll('.right-nav-char-block, .character-block');
-        if (charBlocks.length === 0) {
-            return;
-        }
+        // キャラクターブロックの取得（柔軟なセレクタに対応）
+        const charBlocks = panel.querySelectorAll('.right-nav-char-block, .character-block, .character_select');
+        if (charBlocks.length === 0) return;
 
         console.log(`${LOG_PREFIX} Updating character images... Found ${charBlocks.length} character blocks`);
 
@@ -139,9 +130,9 @@
             const block = charBlocks[i];
             
             // キャラクター名の取得
-            let charName = block.dataset.name || block.getAttribute('data-name');
+            let charName = block.dataset.name || block.getAttribute('data-name') || block.getAttribute('chid');
             if (!charName) {
-                const nameEl = block.querySelector('.character-name, .char-name');
+                const nameEl = block.querySelector('.character-name, .char-name, .ch_name');
                 if (nameEl) charName = nameEl.textContent.trim();
             }
 
@@ -150,8 +141,8 @@
             const mediaSrc = await getCharacterImageSrc(charName);
             if (!mediaSrc) continue;
 
-            // 既存の画像/動画コンテナを取得または作成
-            let imgContainer = block.querySelector('.right-nav-img-container');
+            // 既存のアバター/画像コンテナを取得または作成
+            let imgContainer = block.querySelector('.right-nav-img-container, .avatar');
             if (!imgContainer) {
                 imgContainer = document.createElement('div');
                 imgContainer.className = 'right-nav-img-container';
@@ -180,14 +171,18 @@
 
     const debouncedUpdate = debounce(updateCharacterImages, 300);
 
-    // --- DOM監視 (パネルの描画変化に追従) ---
+    // --- DOM監視 ---
     function setupMutationObserver() {
         const targetNode = document.body;
         const observer = new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 if (mutation.addedNodes.length > 0) {
                     const hasPanel = Array.from(mutation.addedNodes).some(node => 
-                        node.nodeType === 1 && (node.id === 'right-nav-panel' || node.classList.contains('right-nav-panel') || node.querySelector('#right-nav-panel'))
+                        node.nodeType === 1 && (
+                            node.id === 'right-nav-panel' || 
+                            node.classList.contains('right-nav-panel') || 
+                            node.querySelector && node.querySelector('#right-nav-panel, .character_select')
+                        )
                     );
                     if (hasPanel) {
                         debouncedUpdate();
