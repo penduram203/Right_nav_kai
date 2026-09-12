@@ -36,16 +36,20 @@
         if (!basePath || typeof basePath !== 'string' || !basePath.trim()) return null;
         const cleanPath = basePath.trim();
 
+        // 1. 既に検出結果がキャッシュされていれば即返す
         if (mediaCache.has(cleanPath)) {
             return mediaCache.get(cleanPath);
         }
 
+        // 2. パスに拡張子がすでに含まれている場合、または総当たりを行わずに直接存在確認する場合
+        // （_ext.json等で拡張子が明記されている場合はそのままチェックする）
         const exists = await checkMediaExists(cleanPath);
         if (exists) {
             mediaCache.set(cleanPath, cleanPath);
             return cleanPath;
         }
 
+        // 3. 拡張子が含まれておらず、かつファイルが存在しない場合は 404 キャッシュとして保持
         mediaCache.set(cleanPath, null);
         return null;
     }
